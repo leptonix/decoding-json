@@ -21,7 +21,7 @@
 PG_MODULE_MAGIC;
 
 extern void _PG_init(void);
-extern void _PG_output_plugin_init(OutputPluginCallbacks *cb);
+extern void _PG_output_plugin_init(OutputPluginCallbacks* cb);
 
 typedef struct _DecodingJsonData DecodingJsonData;
 struct _DecodingJsonData {
@@ -80,22 +80,21 @@ static void pg_output_begin(LogicalDecodingContext* ctx, DecodingJsonData* data,
   OutputPluginPrepareWrite(ctx, last_write);
   appendStringInfo(
     ctx->out,
-    "{\"$type\":\"transaction\",\"xid\":\"%u\",\"state\":\"begin\"}",
+    "{\"type\":\"transaction.begin\",\"xid\":\"%u\"}",
     txn->xid
-    );
-    OutputPluginWrite(ctx, last_write);
-  }
+  );
+  OutputPluginWrite(ctx, last_write);
+}
 
 static void pg_decode_commit_txn(LogicalDecodingContext* ctx, ReorderBufferTXN* txn, XLogRecPtr commit_lsn) {
-  //DecodingJsonData* data = ctx->output_plugin_private;
   OutputPluginPrepareWrite(ctx, true);
   appendStringInfo(
     ctx->out,
-    "{\"$type\":\"transaction\",\"xid\":\"%u\",\"state\":\"commit\"}",
+    "{\"type\":\"transaction.commit\",\"xid\":\"%u\"}",
     txn->xid
-    );
-    OutputPluginWrite(ctx, true);
-  }
+  );
+  OutputPluginWrite(ctx, true);
+}
 
 static void print_literal(StringInfo s, Oid typid, char* outputstr) {
   const char* valptr;
@@ -127,9 +126,7 @@ static void print_literal(StringInfo s, Oid typid, char* outputstr) {
       appendStringInfoChar(s, '"');
       for (valptr = outputstr; *valptr; valptr++) {
         char ch = *valptr;
-
-        if (SQL_STR_DOUBLE(ch, false))
-          appendStringInfoChar(s, ch);
+        if (SQL_STR_DOUBLE(ch, false)) appendStringInfoChar(s, ch);
         appendStringInfoChar(s, ch);
       }
       appendStringInfoChar(s, '"');
@@ -186,10 +183,6 @@ static void pg_decode_change(LogicalDecodingContext* ctx, ReorderBufferTXN* txn,
 
   data = ctx->output_plugin_private;
 
-  /* output BEGIN if we haven't yet */
-  if (!data->xact_wrote_changes) {
-    pg_output_begin(ctx, data, txn, false);
-  }
   data->xact_wrote_changes = true;
 
   class_form = RelationGetForm(relation);
@@ -199,7 +192,7 @@ static void pg_decode_change(LogicalDecodingContext* ctx, ReorderBufferTXN* txn,
 
   OutputPluginPrepareWrite(ctx, true);
 
-  appendStringInfoString(ctx->out, "{\"$type\":\"table\",\"name\":\"");
+  appendStringInfoString(ctx->out, "{\"type\":\"table\",\"name\":\"");
   appendStringInfoString(
     ctx->out,
     quote_qualified_identifier(
@@ -234,8 +227,8 @@ static void pg_decode_change(LogicalDecodingContext* ctx, ReorderBufferTXN* txn,
   if (heaptuple != NULL) {
     appendStringInfoString(ctx->out, ",\"data\":{");
     tuple_to_stringinfo(
-    ctx->out, tupdesc, heaptuple,
-    change->action == REORDER_BUFFER_CHANGE_DELETE
+      ctx->out, tupdesc, heaptuple,
+      change->action == REORDER_BUFFER_CHANGE_DELETE
     );
     appendStringInfoChar(ctx->out, '}');
   }
