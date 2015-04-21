@@ -1,20 +1,3 @@
-/*
- * decoding_json.c
- */
-
-/*-------------------------------------------------------------------------
- *
- * test_decoding.c
- *		  example logical decoding output plugin
- *
- * Copyright (c) 2012-2014, PostgreSQL Global Development Group
- *
- * IDENTIFICATION
- *		  contrib/test_decoding/test_decoding.c
- *
- *-------------------------------------------------------------------------
- */
-
 #include "postgres.h"
 
 #include "access/sysattr.h"
@@ -95,14 +78,22 @@ static void pg_decode_begin_txn(LogicalDecodingContext* ctx, ReorderBufferTXN* t
 
 static void pg_output_begin(LogicalDecodingContext* ctx, DecodingJsonData* data, ReorderBufferTXN* txn, bool last_write) {
 	OutputPluginPrepareWrite(ctx, last_write);
-	appendStringInfoString(ctx->out, "BEGIN (testing)");
+	appendStringInfo(
+		ctx->out,
+		"{\"$type\":\"transaction\",\"xid\":\"%u\",\"state\":\"begin\"}",
+		txn->xid
+	);
 	OutputPluginWrite(ctx, last_write);
 }
 
 static void pg_decode_commit_txn(LogicalDecodingContext* ctx, ReorderBufferTXN* txn, XLogRecPtr commit_lsn) {
 	//DecodingJsonData* data = ctx->output_plugin_private;
 	OutputPluginPrepareWrite(ctx, true);
-  appendStringInfoString(ctx->out, "COMMIT");
+	appendStringInfo(
+		ctx->out,
+		"{\"$type\":\"transaction\",\"xid\":\"%u\",\"state\":\"commit\"}",
+		txn->xid
+	);
 	OutputPluginWrite(ctx, true);
 }
 
@@ -122,7 +113,7 @@ static void print_literal(StringInfo s, Oid typid, char* outputstr) {
 
 		case BITOID:
 		case VARBITOID:
-			appendStringInfo(s, "B'%s'", outputstr);
+			appendStringInfo(s, "\"B'%s'\"", outputstr);
 			break;
 
 		case BOOLOID:
@@ -133,7 +124,7 @@ static void print_literal(StringInfo s, Oid typid, char* outputstr) {
 			break;
 
 		default:
-			appendStringInfoChar(s, '\'');
+			appendStringInfoChar(s, '"');
 			for (valptr = outputstr; *valptr; valptr++) {
 				char ch = *valptr;
 
@@ -141,18 +132,13 @@ static void print_literal(StringInfo s, Oid typid, char* outputstr) {
 					appendStringInfoChar(s, ch);
 				appendStringInfoChar(s, ch);
 			}
-			appendStringInfoChar(s, '\'');
+			appendStringInfoChar(s, '"');
 			break;
 	}
 }
 
 static void tuple_to_stringinfo(StringInfo s, TupleDesc tupdesc, HeapTuple tuple, bool skip_nulls) {
 	int natt;
-	Oid oid;
-
-	if ((oid = HeapTupleHeaderGetOid(tuple->t_data)) != InvalidOid) {
-		appendStringInfo(s, " oid[oid]:%u", oid);
-	}
 
 	for (natt = 0; natt < tupdesc->natts; natt++) {
 		Form_pg_attribute attr;
@@ -164,40 +150,23 @@ static void tuple_to_stringinfo(StringInfo s, TupleDesc tupdesc, HeapTuple tuple
 
 		attr = tupdesc->attrs[natt];
 
-		if (attr->attisdropped)
-			continue;
-
-		if (attr->attnum < 0)
-			continue;
+		if (attr->attisdropped) continue;
+		if (attr->attnum < 0) continue;
 
 		typid = attr->atttypid;
-
-		/* get Datum from tuple */
 		origval = fastgetattr(tuple, natt + 1, tupdesc, &isnull);
 
-		if (isnull && skip_nulls)
-			continue;
+		if (isnull && skip_nulls) continue;
 
-		/* print attribute name */
-		appendStringInfoChar(s, ' ');
-		appendStringInfoString(s, quote_identifier(NameStr(attr->attname)));
+		if (natt > 0) appendStringInfoChar(s, ',');
+		appendStringInfo(s, "\"%s\":", NameStr(attr->attname));
 
-		/* print attribute type */
-		appendStringInfoChar(s, '[');
-		appendStringInfoString(s, format_type_be(typid));
-		appendStringInfoChar(s, ']');
-
-		/* query output function */
 		getTypeOutputInfo(typid, &typoutput, &typisvarlena);
 
-		/* print separator */
-		appendStringInfoChar(s, ':');
-
-		/* print data */
 		if (isnull) {
 			appendStringInfoString(s, "null");
     } else if (typisvarlena && VARATT_IS_EXTERNAL_ONDISK(origval)) {
-			appendStringInfoString(s, "unchanged-toast-datum");
+			appendStringInfoString(s, "\"???unchanged-toast-datum???\"");
     } else if (!typisvarlena) {
 			print_literal(s, typid, OidOutputFunctionCall(typoutput, origval));
     } else {
@@ -209,13 +178,11 @@ static void tuple_to_stringinfo(StringInfo s, TupleDesc tupdesc, HeapTuple tuple
 	}
 }
 
-/*
- * callback for individual changed tuples
- */
 static void pg_decode_change(LogicalDecodingContext* ctx, ReorderBufferTXN* txn, Relation relation, ReorderBufferChange* change) {
 	DecodingJsonData* data;
 	Form_pg_class class_form;
 	TupleDesc	tupdesc;
+	HeapTuple heaptuple;
 	MemoryContext old;
 
 	data = ctx->output_plugin_private;
@@ -233,7 +200,7 @@ static void pg_decode_change(LogicalDecodingContext* ctx, ReorderBufferTXN* txn,
 
 	OutputPluginPrepareWrite(ctx, true);
 
-	appendStringInfoString(ctx->out, "table ");
+	appendStringInfoString(ctx->out, "{\"$type\":\"table\",\"name\":\"");
 	appendStringInfoString(
     ctx->out,
     quote_qualified_identifier(
@@ -245,64 +212,53 @@ static void pg_decode_change(LogicalDecodingContext* ctx, ReorderBufferTXN* txn,
       NameStr(class_form->relname)
     )
   );
-	appendStringInfoString(ctx->out, ":");
+	appendStringInfoString(ctx->out, "\",\"change\":\"");
 
 	switch (change->action) {
 		case REORDER_BUFFER_CHANGE_INSERT:
-			appendStringInfoString(ctx->out, " INSERT:");
-			if (change->data.tp.newtuple == NULL) {
-				appendStringInfoString(ctx->out, " (no-tuple-data)");
-      } else {
-				tuple_to_stringinfo(
-          ctx->out, tupdesc,
-          &change->data.tp.newtuple->tuple,
-          false
-        );
-      }
+			appendStringInfoString(ctx->out, "INSERT");
+			heaptuple = &change->data.tp.newtuple->tuple;
 			break;
 		case REORDER_BUFFER_CHANGE_UPDATE:
-			appendStringInfoString(ctx->out, " UPDATE:");
-			if (change->data.tp.oldtuple != NULL) {
-				appendStringInfoString(ctx->out, " old-key:");
-				tuple_to_stringinfo(
-          ctx->out, tupdesc,
-          &change->data.tp.oldtuple->tuple,
-          true
-        );
-				appendStringInfoString(ctx->out, " new-tuple:");
-			}
-
-			if (change->data.tp.newtuple == NULL) {
-				appendStringInfoString(ctx->out, " (no-tuple-data)");
-      } else {
-				tuple_to_stringinfo(
-          ctx->out, tupdesc,
-          &change->data.tp.newtuple->tuple,
-          false
-        );
-      }
+			appendStringInfoString(ctx->out, "UPDATE");
+			heaptuple = &change->data.tp.newtuple->tuple;
 			break;
 		case REORDER_BUFFER_CHANGE_DELETE:
-			appendStringInfoString(ctx->out, " DELETE:");
-
-			/* if there was no PK, we only know that a delete happened */
-			if (change->data.tp.oldtuple == NULL) {
-				appendStringInfoString(ctx->out, " (no-tuple-data)");
-      } else {
-        /* In DELETE, only the replica identity is present; display that */
-				tuple_to_stringinfo(
-          ctx->out, tupdesc,
-          &change->data.tp.oldtuple->tuple,
-          true
-        );
-      }
+			appendStringInfoString(ctx->out, "DELETE");
+			heaptuple = &change->data.tp.oldtuple->tuple;
 			break;
 		default:
+			heaptuple = NULL;
 			Assert(false);
 	}
+	appendStringInfoChar(ctx->out, '"');
+	if (heaptuple != NULL) {
+		appendStringInfoString(ctx->out, ",\"data\":{");
+		tuple_to_stringinfo(
+      ctx->out, tupdesc, heaptuple,
+      change->action == REORDER_BUFFER_CHANGE_DELETE
+    );
+		appendStringInfoChar(ctx->out, '}');
+	}
+	appendStringInfoChar(ctx->out, '}');
 
 	MemoryContextSwitchTo(old);
 	MemoryContextReset(data->context);
 
 	OutputPluginWrite(ctx, true);
 }
+
+/* adapted from test_decoding.c */
+
+/*-------------------------------------------------------------------------
+ *
+ * test_decoding.c
+ *		  example logical decoding output plugin
+ *
+ * Copyright (c) 2012-2014, PostgreSQL Global Development Group
+ *
+ * IDENTIFICATION
+ *		  contrib/test_decoding/test_decoding.c
+ *
+ *-------------------------------------------------------------------------
+ */
