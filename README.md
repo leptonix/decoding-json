@@ -8,11 +8,12 @@ Adapted from postgresql-9.4.1/contrib/test_decoding
 
 format
 ------
-    {"type":"transaction.begin","xid":"2010539","committed":"2015-04-22 12:04:17.498163+00"}
-    {"type":"table","name":"tv.kijkcijfers","change":"INSERT","data":{"id":1,"time":"2014-02-17 02:00:00+00","channel":1,"name":"journaal","kdh":0.4,"madl":14.4,"abs":58000}}
-    {"type":"table","name":"tv.kijkcijfers","change":"UPDATE","data":{"id":1,"time":"2014-02-17 02:00:00+00","channel":1,"name":"test","kdh":0.4,"madl":14.4,"abs":58000}}
-    {"type":"table","name":"tv.kijkcijfers","change":"DELETE","data":{"id":2}}
-    {"type":"transaction.commit","xid":"2010539","committed":"2015-04-22 12:04:17.498163+00"}
+    {"type":"transaction.begin","xid":"2010561","committed":"2015-04-22 19:23:35.714443+00"}
+    {"type":"table","name":"abc","change":"INSERT","data":{"a":6,"b":7,"c":42}}
+    {"type":"table","name":"abc","change":"UPDATE","key":{"a":6,"b":7},"data":{"a":6,"b":7,"c":13}}
+    {"type":"table","name":"abc","change":"UPDATE","key":{"a":6,"b":7},"data":{"a":2,"b":7,"c":13}}
+    {"type":"table","name":"abc","change":"DELETE","key":{"a":2,"b":7}}
+    {"type":"transaction.commit","xid":"2010561","committed":"2015-04-22 19:23:35.714443+00"}
 
 install
 -------

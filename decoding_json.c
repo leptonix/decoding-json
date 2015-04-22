@@ -1,5 +1,6 @@
 #include "postgres.h"
 
+#include "access/genam.h"
 #include "access/sysattr.h"
 
 #include "catalog/pg_class.h"
@@ -128,51 +129,55 @@ static void print_literal(StringInfo s, Oid typid, char* outputstr) {
       appendStringInfoChar(s, '"');
       for (valptr = outputstr; *valptr; valptr++) {
         char ch = *valptr;
-        if (SQL_STR_DOUBLE(ch, false)) appendStringInfoChar(s, ch);
-        appendStringInfoChar(s, ch);
+        if (ch == '\n') {
+          appendStringInfoString(s, "\\n");
+        } else if (ch == '\r') {
+          appendStringInfoString(s, "\\r");
+        } else if (ch == '\t') {
+          appendStringInfoString(s, "\\t");
+        } else if (ch == '"') {
+          appendStringInfoString(s, "\\\"");
+        } else if (ch == '\\') {
+          appendStringInfoString(s, "\\\\");
+        } else {
+          appendStringInfoChar(s, ch);
+        }
       }
       appendStringInfoChar(s, '"');
       break;
   }
 }
 
+static void print_value(StringInfo s, TupleDesc tupdesc, HeapTuple tuple, int i) {
+  bool typisvarlena;
+  bool isnull;
+  Oid typoutput;
+  Form_pg_attribute attr = tupdesc->attrs[i];
+  Datum origval = fastgetattr(tuple, i + 1, tupdesc, &isnull);
+  Oid typid = attr->atttypid;
+  getTypeOutputInfo(typid, &typoutput, &typisvarlena);
+  if (isnull) {
+    appendStringInfoString(s, "null");
+  } else if (typisvarlena && VARATT_IS_EXTERNAL_ONDISK(origval)) {
+    appendStringInfoString(s, "\"???unchanged-toast-datum???\"");
+  } else if (!typisvarlena) {
+    print_literal(s, typid, OidOutputFunctionCall(typoutput, origval));
+  } else {
+    Datum val = PointerGetDatum(PG_DETOAST_DATUM(origval));
+    print_literal(s, typid, OidOutputFunctionCall(typoutput, val));
+  }
+}
+
 static void tuple_to_stringinfo(StringInfo s, TupleDesc tupdesc, HeapTuple tuple, bool skip_nulls) {
-  int natt;
-
-  for (natt = 0; natt < tupdesc->natts; natt++) {
-    Form_pg_attribute attr;
-    Oid typid;
-    Oid typoutput;
-    bool typisvarlena;
-    Datum origval;
-    bool isnull;
-
-    attr = tupdesc->attrs[natt];
+  int i;
+  for (i = 0; i < tupdesc->natts; i++) {
+    Form_pg_attribute attr = tupdesc->attrs[i];
 
     if (attr->attisdropped) continue;
     if (attr->attnum < 0) continue;
-
-    typid = attr->atttypid;
-    origval = fastgetattr(tuple, natt + 1, tupdesc, &isnull);
-
-    if (isnull && skip_nulls) continue;
-
-    if (natt > 0) appendStringInfoChar(s, ',');
+    if (i > 0) appendStringInfoChar(s, ',');
     appendStringInfo(s, "\"%s\":", NameStr(attr->attname));
-
-    getTypeOutputInfo(typid, &typoutput, &typisvarlena);
-
-    if (isnull) {
-      appendStringInfoString(s, "null");
-    } else if (typisvarlena && VARATT_IS_EXTERNAL_ONDISK(origval)) {
-      appendStringInfoString(s, "\"???unchanged-toast-datum???\"");
-    } else if (!typisvarlena) {
-      print_literal(s, typid, OidOutputFunctionCall(typoutput, origval));
-    } else {
-      Datum val;  /* definitely detoasted Datum */
-      val = PointerGetDatum(PG_DETOAST_DATUM(origval));
-      print_literal(s, typid, OidOutputFunctionCall(typoutput, val));
-    }
+    print_value(s, tupdesc, tuple, i);
   }
 }
 
@@ -180,7 +185,7 @@ static void pg_decode_change(LogicalDecodingContext* ctx, ReorderBufferTXN* txn,
   DecodingJsonData* data;
   Form_pg_class class_form;
   TupleDesc  tupdesc;
-  HeapTuple heaptuple;
+  HeapTuple tuple;
   MemoryContext old;
 
   data = ctx->output_plugin_private;
@@ -206,32 +211,45 @@ static void pg_decode_change(LogicalDecodingContext* ctx, ReorderBufferTXN* txn,
       NameStr(class_form->relname)
     )
   );
-  appendStringInfoString(ctx->out, "\",\"change\":\"");
+  appendStringInfo(
+    ctx->out,
+    "\",\"change\":\"%s\"",
+    change->action == REORDER_BUFFER_CHANGE_INSERT
+      ? "INSERT"
+      : change->action == REORDER_BUFFER_CHANGE_UPDATE
+        ? "UPDATE"
+        : change->action == REORDER_BUFFER_CHANGE_DELETE
+          ? "DELETE"
+          : "FIXME"
+  );
 
-  switch (change->action) {
-    case REORDER_BUFFER_CHANGE_INSERT:
-      appendStringInfoString(ctx->out, "INSERT");
-      heaptuple = &change->data.tp.newtuple->tuple;
-      break;
-    case REORDER_BUFFER_CHANGE_UPDATE:
-      appendStringInfoString(ctx->out, "UPDATE");
-      heaptuple = &change->data.tp.newtuple->tuple;
-      break;
-    case REORDER_BUFFER_CHANGE_DELETE:
-      appendStringInfoString(ctx->out, "DELETE");
-      heaptuple = &change->data.tp.oldtuple->tuple;
-      break;
-    default:
-      heaptuple = NULL;
-      Assert(false);
+  if (change->action == REORDER_BUFFER_CHANGE_UPDATE || change->action == REORDER_BUFFER_CHANGE_DELETE) {
+    appendStringInfoString(ctx->out, ",\"key\":{");
+    RelationGetIndexList(relation);
+    if (OidIsValid(relation->rd_replidindex)) {
+      int i;
+      Relation index = index_open(relation->rd_replidindex, ShareLock);
+      tuple =
+        change->data.tp.oldtuple
+          ? &change->data.tp.oldtuple->tuple
+          : &change->data.tp.newtuple->tuple;
+      for (i = 0; i < index->rd_index->indnatts; i++) {
+        int j = index->rd_index->indkey.values[i];
+        Form_pg_attribute attr = tupdesc->attrs[j - 1];
+        if (i > 0) appendStringInfoChar(ctx->out, ',');
+        appendStringInfo(ctx->out, "\"%s\":", NameStr(attr->attname));
+        print_value(ctx->out, tupdesc, tuple, j - 1);
+      }
+      index_close(index, NoLock);
+    } else {
+      appendStringInfoString(ctx->out, "\"***FIXME***\"");
+    }
+    appendStringInfoChar(ctx->out, '}');
   }
-  appendStringInfoChar(ctx->out, '"');
-  if (heaptuple != NULL) {
+
+  if (change->action == REORDER_BUFFER_CHANGE_UPDATE || change->action == REORDER_BUFFER_CHANGE_INSERT) {
     appendStringInfoString(ctx->out, ",\"data\":{");
-    tuple_to_stringinfo(
-      ctx->out, tupdesc, heaptuple,
-      change->action == REORDER_BUFFER_CHANGE_DELETE
-    );
+    tuple_to_stringinfo(ctx->out, tupdesc, &change->data.tp.newtuple->tuple, false);
     appendStringInfoChar(ctx->out, '}');
   }
   appendStringInfoChar(ctx->out, '}');
