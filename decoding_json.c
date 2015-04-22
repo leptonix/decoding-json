@@ -80,8 +80,9 @@ static void pg_output_begin(LogicalDecodingContext* ctx, DecodingJsonData* data,
   OutputPluginPrepareWrite(ctx, last_write);
   appendStringInfo(
     ctx->out,
-    "{\"type\":\"transaction.begin\",\"xid\":\"%u\"}",
-    txn->xid
+    "{\"type\":\"transaction.begin\",\"xid\":\"%u\",\"committed\":\"%s\"}",
+    txn->xid,
+    timestamptz_to_str(txn->commit_time)
   );
   OutputPluginWrite(ctx, last_write);
 }
@@ -90,8 +91,9 @@ static void pg_decode_commit_txn(LogicalDecodingContext* ctx, ReorderBufferTXN* 
   OutputPluginPrepareWrite(ctx, true);
   appendStringInfo(
     ctx->out,
-    "{\"type\":\"transaction.commit\",\"xid\":\"%u\"}",
-    txn->xid
+    "{\"type\":\"transaction.commit\",\"xid\":\"%u\",\"committed\":\"%s\"}",
+    txn->xid,
+    timestamptz_to_str(txn->commit_time)
   );
   OutputPluginWrite(ctx, true);
 }
