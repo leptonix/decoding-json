@@ -199,21 +199,20 @@ static void pg_decode_change(LogicalDecodingContext* ctx, ReorderBufferTXN* txn,
 
   OutputPluginPrepareWrite(ctx, true);
 
-  appendStringInfoString(ctx->out, "{\"type\":\"table\",\"name\":\"");
-  appendStringInfoString(
-    ctx->out,
-    quote_qualified_identifier(
-      get_namespace_name(
-        get_rel_namespace(
-          RelationGetRelid(relation)
-        )
-      ),
-      NameStr(class_form->relname)
-    )
-  );
+  appendStringInfoString(ctx->out, "{\"type\":\"table\"");
   appendStringInfo(
     ctx->out,
-    "\",\"change\":\"%s\"",
+    ",\"schema\":\"%s\"",
+    get_namespace_name(
+      get_rel_namespace(
+        RelationGetRelid(relation)
+      )
+    )
+  );
+  appendStringInfo(ctx->out, ",\"name\":\"%s\"", NameStr(class_form->relname));
+  appendStringInfo(
+    ctx->out,
+    ",\"change\":\"%s\"",
     change->action == REORDER_BUFFER_CHANGE_INSERT
       ? "INSERT"
       : change->action == REORDER_BUFFER_CHANGE_UPDATE
