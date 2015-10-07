@@ -6,6 +6,8 @@
 #include "catalog/pg_class.h"
 #include "catalog/pg_type.h"
 
+#include "commands/dbcommands.h"
+
 #include "nodes/parsenodes.h"
 
 #include "replication/output_plugin.h"
@@ -200,6 +202,15 @@ static void pg_decode_change(LogicalDecodingContext* ctx, ReorderBufferTXN* txn,
   OutputPluginPrepareWrite(ctx, true);
 
   appendStringInfoString(ctx->out, "{\"type\":\"table\"");
+  if (change->action == REORDER_BUFFER_CHANGE_INSERT || change->action == REORDER_BUFFER_CHANGE_UPDATE || change->action == REORDER_BUFFER_CHANGE_DELETE) {
+    appendStringInfo(
+      ctx->out,
+      ",\"database\":\"%s\"",
+      get_database_name(
+        change->data.tp.relnode.dbNode
+      )
+    );
+  }
   appendStringInfo(
     ctx->out,
     ",\"schema\":\"%s\"",
