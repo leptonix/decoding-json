@@ -187,6 +187,7 @@ static void pg_decode_change(LogicalDecodingContext* ctx, ReorderBufferTXN* txn,
   TupleDesc  tupdesc;
   HeapTuple tuple;
   MemoryContext old;
+  char* table_name;
 
   data = ctx->output_plugin_private;
 
@@ -194,6 +195,13 @@ static void pg_decode_change(LogicalDecodingContext* ctx, ReorderBufferTXN* txn,
 
   class_form = RelationGetForm(relation);
   tupdesc = RelationGetDescr(relation);
+
+  table_name = NameStr(class_form->relname);
+  
+  if (strncmp(table_name, "pg_temp_", 8) == 0) {
+    /* ignore */
+    return;
+  }
 
   old = MemoryContextSwitchTo(data->context);
 
@@ -209,7 +217,7 @@ static void pg_decode_change(LogicalDecodingContext* ctx, ReorderBufferTXN* txn,
       )
     )
   );
-  appendStringInfo(ctx->out, ",\"name\":\"%s\"", NameStr(class_form->relname));
+  appendStringInfo(ctx->out, ",\"name\":\"%s\"", table_name);
   appendStringInfo(
     ctx->out,
     ",\"change\":\"%s\"",
