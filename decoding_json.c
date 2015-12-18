@@ -241,7 +241,7 @@ static void pg_decode_change(LogicalDecodingContext* ctx, ReorderBufferTXN* txn,
       }
       index_close(index, NoLock);
     } else {
-      appendStringInfoString(ctx->out, "\"***FIXME***\"");
+      appendStringInfoString(ctx->out, "\"***FIXME***\":true");
     }
     appendStringInfoChar(ctx->out, '}');
   }
