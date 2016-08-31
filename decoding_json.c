@@ -170,14 +170,23 @@ static void print_value(StringInfo s, TupleDesc tupdesc, HeapTuple tuple, int i)
 
 static void tuple_to_stringinfo(StringInfo s, TupleDesc tupdesc, HeapTuple tuple, bool skip_nulls) {
   int i;
+  bool skip_comma = false;
+
   for (i = 0; i < tupdesc->natts; i++) {
     Form_pg_attribute attr = tupdesc->attrs[i];
 
-    if (attr->attisdropped) continue;
-    if (attr->attnum < 0) continue;
-    if (i > 0) appendStringInfoChar(s, ',');
+    if (attr->attisdropped || attr->attnum < 0) {
+      skip_comma = true;
+      continue;
+    }
+
+    if (i > 0 && !skip_comma) appendStringInfoChar(s, ',');
     appendStringInfo(s, "\"%s\":", NameStr(attr->attname));
     print_value(s, tupdesc, tuple, i);
+
+    if (skip_comma) {
+      skip_comma = false;
+    }
   }
 }
 
